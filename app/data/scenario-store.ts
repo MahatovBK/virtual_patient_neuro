@@ -1,0 +1,122 @@
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { ScenarioDefinition } from "./scenarios";
+import bundledScenarios from "./scenarios.json";
+import { deleteSupabaseScenario, isSupabaseConfigured, readSupabaseScenarios, saveSupabaseScenario } from "./supabase-store";
+
+const scenariosPath = path.join(process.cwd(), "app", "data", "scenarios.json");
+
+type StoredScenario = ScenarioDefinition;
+
+function isLegacyImport(scenario: StoredScenario) {
+  return scenario.title.length > 80 || scenario.description.includes("Описание:");
+}
+
+function normalizeLegacyImport(scenario: StoredScenario): StoredScenario {
+  if (scenario.id.startsWith("scenario-2-")) {
+    return {
+      ...scenario,
+      title: "Ситуационная задача №2",
+      patient: "Пациент С., 40 лет",
+      description: "Травма левого голеностопного сустава после падения.",
+      difficulty: "Средний",
+      diagnosis: "Перелом лодыжек левого голеностопного сустава",
+      diagnosisKeywords: ["перелом", "лодыж", "голеностоп"],
+      answerRules: [
+        { keywords: ["привет", "здравств", "добрый", "доброе"], answerVariants: ["Здравствуйте. Сильно болит левая нога.", "Здравствуйте, доктор. Я подвернул ногу и теперь почти не могу наступать."] },
+        { keywords: ["когда", "начал", "сколько времени", "давно"], answerVariants: ["Это случилось около двух часов назад.", "Травма произошла примерно два часа назад."] },
+        { keywords: ["механизм", "произош", "травм", "упал", "лёд", "лед", "подвернул", "после чего", "стало бол"], answerVariants: ["Я поскользнулся на льду и упал, подвернув под себя левую ногу.", "Упал на улице, нога подвернулась. После этого я почувствовал хруст и резкую боль."] },
+        { keywords: ["где", "локализ", "место", "какая сторона", "какая нога"], answerVariants: ["Болит снаружи левого голеностопного сустава.", "Боль в области левого голеностопа, особенно с наружной стороны."] },
+        { keywords: ["жалоб", "беспокоит", "симптом", "чувствуете", "что болит", "что случилось"], answerVariants: ["Левая лодыжка сильно болит и опухла, я не могу нормально опереться на ногу.", "Меня беспокоят боль, отёк и то, что я не могу двигать голеностопом."] },
+        { keywords: ["пальц", "чувств", "онем"], answerVariants: ["Пальцами стопы двигаю, чувствительность сохранена, онемения нет.", "Пальцы чувствую и могу ими двигать, хотя движения немного болезненны."] },
+        { keywords: ["движен", "двиг", "наступ", "ходить", "опор"], answerVariants: ["Двигать стопой очень больно, наступить на ногу почти невозможно.", "Стопой могу шевелить, но движения резко ограничены и болезненны. Опора вызывает резкую боль."] },
+        { keywords: ["отек", "отёк", "деформац", "крепитац", "осмотр", "пальпац"], answer: "Голеностопный сустав сильно отёк, снаружи резко болезненен. При движении ощущается хруст, осевая нагрузка резко болезненна." },
+        { keywords: ["голов", "живот", "другие боли", "ещё болит", "еще болит", "где ещё", "где еще", "что ещё", "что еще"], answer: "Голова и живот не болят. Больше ничего не беспокоит, кроме левой ноги." },
+        { keywords: ["дыхани", "дыш", "одышк"], answer: "Дышу нормально, одышки нет." },
+        { keywords: ["аллерг", "препарат", "лекарств"], answer: "Аллергии на лекарственные препараты не припоминаю." },
+        { keywords: ["рентген", "снимок", "снимке"], answer: "Рентгеновский снимок левого голеностопного сустава готов.", imageUrl: scenario.answerRules.find((rule) => rule.imageUrl)?.imageUrl },
+      ],
+      defaultAnswer: "Я не понял вопрос.",
+    };
+  }
+
+  if (!isLegacyImport(scenario) && scenario.id !== "shoulder-dislocation") return scenario;
+
+  const source = `${scenario.title} ${scenario.description}`;
+  const isShoulderCase = /плечев|борьб|потянули за руку/i.test(source);
+
+  if (isShoulderCase) {
+    return {
+      ...scenario,
+      id: "shoulder-dislocation",
+      title: "Ситуационная задача №1",
+      description: "Пациент получил травму правого плеча во время борьбы. Есть резкая боль, деформация и резкое ограничение движений.",
+      difficulty: "Средний",
+      patient: "Пациент К., 21 год",
+      xrayImage: "/xray-right-shoulder.svg",
+      diagnosis: "Передний вывих правого плечевого сустава",
+      answerRules: [
+        { keywords: ["привет", "здравств", "добрый", "доброе", "доброе утро"], answerVariants: ["Здравствуйте. У меня сильно болит правое плечо.", "Привет. Я повредил правое плечо и почти не могу им двигать."] },
+        { keywords: ["когда", "начал", "сколько времени", "давно"], answerVariants: ["Травма произошла около 30 минут назад, во время соревнований по борьбе.", "Это случилось примерно полчаса назад на соревнованиях."] },
+        { keywords: ["механизм", "произош", "травм", "борьб", "потянул", "после чего", "стало бол"], answerVariants: ["Во время броска меня резко потянули за правую руку. Я почувствовал щелчок и сразу резкую боль.", "Меня дёрнули за руку во время броска. После щелчка сразу появилась сильная боль."] },
+        { keywords: ["где", "локализ", "место", "какая сторона", "какое плечо"], answerVariants: ["Болит справа, в области плечевого сустава.", "Боль сосредоточена в правом плече, ближе к суставу."] },
+        { keywords: ["пальц", "кист", "чувств", "онем", "слабост ру"], answerVariants: ["Пальцами двигаю, кисть чувствую, онемения нет.", "Кисть и пальцы чувствую нормально, двигать ими могу."] },
+        { keywords: ["что беспокоит", "жалоб", "симптом", "чувствуете", "что болит", "что случилось"], answerVariants: ["Сильно болит правое плечо, оно выглядит деформированным, и я почти не могу двигать рукой.", "Главное - резкая боль и ощущение, что правое плечо находится не на месте."] },
+        { keywords: ["движен", "двиг", "поднять", "пассивн", "активн"], answerVariants: ["Движения резко ограничены и болезненны, даже если кто-то пытается осторожно подвигать рукой.", "Я не могу нормально поднять руку. Любая попытка движения вызывает боль."] },
+        { keywords: ["осмотр", "отек", "отёк", "западен", "деформац", "пальпац"], answerVariants: ["Есть умеренная отёчность и западение мягких тканей. Головка плеча смещена, при пассивном движении ощущается пружинящее сопротивление.", "Плечо припухло, контур сустава изменён, а при попытке движения рука пружинит."] },
+        { keywords: ["голов", "живот", "другие боли", "ещё болит", "еще болит", "где ещё", "где еще", "что ещё", "что еще"], answer: "Голова и живот не болят. Больше ничего не беспокоит, только правое плечо." },
+        { keywords: ["дыхани", "дыш", "одышк"], answer: "Дышу нормально, одышки нет." },
+        { keywords: ["сердц", "сердцебиен", "пульс"], answer: "Сердце не беспокоит, сильного сердцебиения не чувствую." },
+        { keywords: ["сознани", "головокруж", "обморок"], answer: "Сознание не терял, головокружения не было." },
+        { keywords: ["температур", "озноб", "лихорад"], answer: "Температуры и озноба нет." },
+        { keywords: ["давлен", "гипертон"], answer: "Давление обычно нормальное, гипертонией не страдаю." },
+        { keywords: ["аллерг", "препарат", "лекарств"], answer: "Аллергии на лекарственные препараты не припоминаю." },
+        { keywords: ["рентген", "снимок", "снимке", "исследован"], answer: "Рентгеновский снимок правого плечевого сустава готов.", imageUrl: "/xray-right-shoulder.svg" },
+        { keywords: ["другие", "остальн", "температур", "систем"], answer: "По остальным органам и системам без особенностей." },
+      ],
+      defaultAnswer: "Я не понял вопрос.",
+    };
+  }
+
+  return {
+    ...scenario,
+    title: scenario.title.split(".")[0] || "Новая клиническая задача",
+    description: "Клинический случай загружен. Уточните у пациента жалобы, время начала и обстоятельства заболевания.",
+    patient: scenario.patient.length > 70 ? "Пациент из клинической задачи" : scenario.patient,
+  };
+}
+
+export async function readScenarios() {
+  if (isSupabaseConfigured()) {
+    return (await readSupabaseScenarios()) ?? [];
+  }
+
+  let scenarios: StoredScenario[];
+  try {
+    scenarios = JSON.parse(await readFile(scenariosPath, "utf8")) as StoredScenario[];
+  } catch {
+    scenarios = bundledScenarios as StoredScenario[];
+  }
+  const normalizedScenarios = [...new Map(scenarios.map(normalizeLegacyImport).map((scenario) => [scenario.id, scenario])).values()];
+
+  return normalizedScenarios;
+}
+
+export async function appendScenario(scenario: StoredScenario) {
+  if (isSupabaseConfigured()) {
+    await saveSupabaseScenario(scenario);
+    return;
+  }
+  const scenarios = await readScenarios();
+  scenarios.push(scenario);
+  await writeFile(scenariosPath, `${JSON.stringify(scenarios, null, 2)}\n`, "utf8");
+}
+
+export async function removeScenario(id: string) {
+  if (isSupabaseConfigured()) {
+    await deleteSupabaseScenario(id);
+    return;
+  }
+  const scenarios = await readScenarios();
+  await writeFile(scenariosPath, `${JSON.stringify(scenarios.filter((scenario) => scenario.id !== id), null, 2)}\n`, "utf8");
+}
